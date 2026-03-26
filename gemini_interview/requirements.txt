@@ -1,0 +1,20 @@
+# Data & ML Libraries
+pandas
+numpy
+scikit-learn
+matplotlib
+
+# API & ML
+google-genai
+setuptools
+
+# FastAPI & Backend
+fastapi>=0.100.0
+uvicorn>=0.23.0
+pydantic>=2.0.0
+python-dotenv>=1.0.0
+python-multipart>=0.0.5
+
+# Streamlit & Frontend
+streamlit>=1.25.0
+requests>=2.30.0
