@@ -2,7 +2,7 @@
 setlocal enabledelayedexpansion
 
 echo.
-echo === Gemini Interview Q&A Generator ===
+echo === Gemini Interview Q^&A Generator ===
 echo.
 
 REM Get the directory where this script is located
@@ -25,10 +25,9 @@ if not exist "..\venv\Scripts\python.exe" (
 )
 
 set PYTHON_EXE=..\venv\Scripts\python.exe
-set PIP_EXE=..\venv\Scripts\pip.exe
 
 echo [1] Installing dependencies...
-"!PIP_EXE!" install -q -r requirements.txt
+"!PYTHON_EXE!" -m pip install -q -r requirements.txt
 if errorlevel 1 (
     echo WARNING: Some dependencies may have failed
 )

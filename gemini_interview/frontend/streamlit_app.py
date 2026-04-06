@@ -2,6 +2,8 @@ import streamlit as st
 import requests
 import json
 from datetime import datetime
+import base64
+import io
 
 # Page configuration
 st.set_page_config(
@@ -11,7 +13,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS
+# Custom CSS for professional appearance
 st.markdown("""
     <style>
     .main {
@@ -75,9 +77,16 @@ st.markdown("""
         font-weight: bold;
         color: #0066cc;
     }
-    .scroll-container {
-        max-height: 800px;
-        overflow-y: auto;
+    .pii-warning {
+        background-color: #fff3cd;
+        border-left: 4px solid #ffc107;
+        padding: 1rem;
+        margin: 1rem 0;
+        border-radius: 0.25rem;
+    }
+    .pii-content {
+        color: #856404;
+        font-size: 0.9rem;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -93,6 +102,32 @@ def check_api_health():
         return response.status_code == 200
     except requests.exceptions.ConnectionError:
         return False
+
+
+def process_resume(file, num_questions: int):
+    """Call FastAPI to process resume and generate Q&A"""
+    try:
+        with st.spinner("📤 Processing resume and generating questions..."):
+            files = {"file": (file.name, file.getbuffer(), "application/octet-stream")}
+            params = {"num_questions": num_questions}
+            
+            response = requests.post(
+                f"{API_URL}/api/process-resume",
+                files=files,
+                params=params,
+                timeout=60
+            )
+        
+        if response.status_code == 200:
+            data = response.json()
+            return data, None
+        else:
+            error_detail = response.json().get("detail", f"Status {response.status_code}")
+            return None, error_detail
+    except requests.exceptions.Timeout:
+        return None, "Request timed out. Please try again."
+    except Exception as e:
+        return None, f"Error: {str(e)}"
 
 
 def generate_qa_from_text(experience: str, num_questions: int):
@@ -113,115 +148,75 @@ def generate_qa_from_text(experience: str, num_questions: int):
         if response.status_code == 200:
             data = response.json()
             if data.get("status") == "success":
-                return data.get("data"), None
+                raw_qa = data.get("data", "")
+                # Parse raw QA into structured format
+                qa_items = parse_qa_response(raw_qa)
+                return qa_items, None
             else:
                 return None, data.get("error", "Unknown error occurred")
         else:
-            return None, f"API Error: {response.status_code} - {response.text}"
+            return None, f"API Error: {response.status_code}"
     except requests.exceptions.Timeout:
         return None, "Request timed out. Please try again."
     except Exception as e:
         return None, f"Error: {str(e)}"
 
 
-def generate_qa_from_file(file, num_questions: int):
-    """Call FastAPI to generate Q&A from uploaded file"""
+def parse_qa_response(response_text: str) -> list:
+    """Parse Q&A response into structured list"""
+    import re
+    qa_items = []
+    
+    if not response_text:
+        return qa_items
+    
+    # Try JSON pattern first
+    json_pattern = r'\{[^{}]*"Topic"[^{}]*"Question"[^{}]*"Answer"[^{}]*\}'
+    matches = re.finditer(json_pattern, response_text, re.DOTALL)
+    
+    for match in matches:
+        try:
+            json_str = match.group(0).replace('\n', ' ')
+            qa_data = json.loads(json_str)
+            if all(key in qa_data for key in ['Topic', 'Question', 'Answer']):
+                qa_items.append({
+                    'Topic': str(qa_data['Topic']).strip(),
+                    'Question': str(qa_data['Question']).strip(),
+                    'Answer': str(qa_data['Answer']).strip()
+                })
+        except json.JSONDecodeError:
+            continue
+    
+    return qa_items
+
+
+def download_excel(qa_items: list, candidate_name: str = ""):
+    """Convert QA items to Excel file"""
     try:
-        with st.spinner("📤 Uploading file and generating questions..."):
-            files = {"file": (file.name, file, "text/plain")}
-            params = {"num_questions": num_questions}
-            
+        qa_json = json.dumps(qa_items)
+        
+        with st.spinner("⏳ Generating Excel file..."):
+            params = {"candidate_name": candidate_name}
             response = requests.post(
-                f"{API_URL}/api/generate-from-upload",
-                files=files,
-                params=params,
-                timeout=60
+                f"{API_URL}/api/download-excel",
+                data={"qa_items_json": qa_json},
+                params=params if candidate_name else {},
+                timeout=30
             )
         
         if response.status_code == 200:
-            data = response.json()
-            return data.get("generated_qa"), None, data.get("filename")
+            return response.content, None
         else:
-            return None, f"API Error: {response.status_code}", None
-    except requests.exceptions.Timeout:
-        return None, "Request timed out. Please try again.", None
+            return None, "Failed to generate Excel file"
     except Exception as e:
-        return None, f"Error: {str(e)}", None
+        return None, f"Error: {str(e)}"
 
 
-def save_results(content: str, filename_prefix: str = "interview_qa"):
-    """Save generated Q&A to file"""
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"{filename_prefix}_{timestamp}.txt"
-    return filename, content
-
-
-def parse_qa_results(raw_text: str) -> list:
-    """Parse raw Q&A text into structured list of Q&A items"""
-    qa_items = []
-    current_item = {}
-    
-    lines = raw_text.split('\n')
-    
-    for line in lines:
-        line = line.strip()
-        if not line:
-            if current_item and "Question" in current_item and "Answer" in current_item:
-                qa_items.append(current_item)
-                current_item = {}
-            continue
-        
-        # Try to parse JSON format
-        if line.startswith('{'):
-            try:
-                item = json.loads(line)
-                if "Topic" in item and "Question" in item and "Answer" in item:
-                    qa_items.append(item)
-                    current_item = {}
-                    continue
-            except json.JSONDecodeError:
-                pass
-        
-        # Parse Topic
-        if line.startswith('"Topic"') or 'Topic' in line:
-            try:
-                match = line.find(':')
-                if match != -1:
-                    topic_val = line[match+1:].strip().strip('",')
-                    current_item['Topic'] = topic_val
-            except:
-                pass
-        
-        # Parse Question
-        elif line.startswith('"Question"') or 'Question' in line and 'Topic' not in line:
-            try:
-                match = line.find(':')
-                if match != -1:
-                    question_val = line[match+1:].strip().strip('",')
-                    current_item['Question'] = question_val
-            except:
-                pass
-        
-        # Parse Answer
-        elif line.startswith('"Answer"') or 'Answer' in line:
-            try:
-                match = line.find(':')
-                if match != -1:
-                    answer_val = line[match+1:].strip().strip('",')
-                    current_item['Answer'] = answer_val
-            except:
-                pass
-    
-    # Add last item if exists
-    if current_item and "Question" in current_item:
-        qa_items.append(current_item)
-    
-    return qa_items if qa_items else [{"Topic": "Q&A", "Question": "", "Answer": raw_text}]
-
-
-def display_qa_results(raw_result: str):
+def display_qa_results(qa_items: list):
     """Display Q&A results in a user-friendly format"""
-    qa_items = parse_qa_results(raw_result)
+    if not qa_items:
+        st.warning("No Q&A items to display")
+        return
     
     # Results summary
     st.markdown(f"""
@@ -246,21 +241,13 @@ def display_qa_results(raw_result: str):
                 <div class="qa-answer">{answer}</div>
             </div>
             """, unsafe_allow_html=True)
-            
-            # Copy button for individual Q&A
-            col1, col2 = st.columns(2)
-            with col1:
-                qa_text = f"Topic: {topic}\n\nQ: {question}\n\nA: {answer}"
-                st.write("")  # Add spacing
-            with col2:
-                st.write("")  # Add spacing
 
 
 # Main app
 def main():
     # Header
     st.title("🤖 Gemini Interview Q&A Generator")
-    st.markdown("Generate comprehensive interview questions and answers using Google Gemini AI")
+    st.markdown("Generate comprehensive interview questions from resumes using Google Gemini AI")
     
     # Check API connection
     if not check_api_health():
@@ -285,10 +272,16 @@ def main():
         )
         
         st.markdown("---")
-        st.markdown("### 📋 Input Method")
+        st.markdown("### 📋 Features")
+        st.markdown("""
+        ✓ **Resume Parsing** - PDF & DOCX support
+        ✓ **PII Redaction** - Protects sensitive data
+        ✓ **Excel Export** - Professional formatted output
+        ✓ **AI-Powered** - Google Gemini 2.5 Flash
+        """)
     
     # Main content - Tabs for different input methods
-    tab1, tab2 = st.tabs(["📝 Text Input", "📄 File Upload"])
+    tab1, tab2 = st.tabs(["📝 Text Input", "📄 Resume Upload"])
     
     with tab1:
         st.subheader("Enter Candidate Experience")
@@ -310,28 +303,27 @@ statistics, machine learning, Tableau, Power BI""")
         with col1:
             if st.button("🚀 Generate Q&A", use_container_width=True, key="generate_text"):
                 if candidate_experience.strip():
-                    result, error = generate_qa_from_text(candidate_experience, num_questions)
+                    qa_items, error = generate_qa_from_text(candidate_experience, num_questions)
                     
-                    if result:
+                    if qa_items:
+                        st.session_state.last_qa_items = qa_items
+                        st.session_state.last_candidate_name = "Candidate"
                         st.markdown("### ✅ Generated Interview Q&A")
-                        st.text_area(
-                            "Results",
-                            value=result,
-                            height=400,
-                            disabled=True
-                        )
+                        display_qa_results(qa_items)
                         
-                        # Download button
-                        col_down1, col_down2 = st.columns([1, 1])
-                        with col_down1:
-                            filename, content = save_results(result, "interview_qa_text")
-                            st.download_button(
-                                label="📥 Download Results",
-                                data=content,
-                                file_name=filename,
-                                mime="text/plain",
-                                use_container_width=True
-                            )
+                        # Download options
+                        col_excel, col_txt = st.columns([1, 1])
+                        
+                        with col_excel:
+                            excel_data, excel_error = download_excel(qa_items, "Candidate")
+                            if excel_data:
+                                st.download_button(
+                                    label="📊 Download as Excel",
+                                    data=excel_data,
+                                    file_name=f"interview_qa_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                    use_container_width=True
+                                )
                     else:
                         st.error(f"❌ Error: {error}")
                 else:
@@ -341,59 +333,111 @@ statistics, machine learning, Tableau, Power BI""")
             st.info("💡 **Tip:** Be specific about tools and experience levels for better questions")
     
     with tab2:
-        st.subheader("Upload Candidate Profile")
+        st.subheader("Upload & Process Resume")
+        st.markdown("Supported formats: **PDF** and **Word (.docx)**")
         
         uploaded_file = st.file_uploader(
-            "Choose a text file (.txt)",
-            type=["txt"],
-            help="Upload a text file containing candidate experience and profile"
+            "Choose a resume file",
+            type=["pdf", "docx"],
+            help="Upload your resume in PDF or DOCX format"
         )
         
         if uploaded_file:
-            st.success(f"✓ File selected: **{uploaded_file.name}** ({uploaded_file.size} bytes)")
-            
-            # Show file preview
-            with st.expander("👁️ Preview file content"):
-                file_content = uploaded_file.read().decode("utf-8")
-                st.text(file_content)
-                uploaded_file.seek(0)  # Reset file pointer
+            st.success(f"✓ File selected: **{uploaded_file.name}** ({uploaded_file.size / 1024:.1f} KB)")
             
             col1, col2 = st.columns([1, 1])
             with col1:
-                if st.button("🚀 Generate Q&A", use_container_width=True, key="generate_file"):
-                    result, error, filename = generate_qa_from_file(uploaded_file, num_questions)
+                if st.button("🚀 Process & Generate Q&A", use_container_width=True, key="generate_resume"):
+                    result, error = process_resume(uploaded_file, num_questions)
                     
-                    if result:
-                        st.markdown("### ✅ Generated Interview Q&A")
-                        display_qa_results(result)
+                    if result and result.get("status") == "success":
+                        # Store for later use
+                        st.session_state.last_qa_items = result.get("qa_items", [])
+                        st.session_state.last_candidate_name = Path(uploaded_file.name).stem
                         
-                        # Download button
-                        col_down1, col_down2 = st.columns([1, 1])
-                        with col_down1:
-                            save_filename, content = save_results(result, f"interview_qa_{filename}")
-                            st.download_button(
-                                label="📥 Download Results",
-                                data=content,
-                                file_name=save_filename,
-                                mime="text/plain",
-                                use_container_width=True
-                            )
+                        # Show PII warning if detected
+                        if result.get("pii_detected"):
+                            st.markdown(f"""
+                            <div class="pii-warning">
+                                <div class="pii-content">
+                                <strong>🔒 PII Detection Report:</strong><br>
+                                ✓ PII has been detected and removed before sending to AI<br>
+                                • Emails found: {len(result.get('pii_summary', {}).get('emails', []))}<br>
+                                • Phone numbers found: {len(result.get('pii_summary', {}).get('phone_numbers', []))}<br>
+                                • URLs found: {len(result.get('pii_summary', {}).get('urls', []))}<br>
+                                <br>
+                                Your sensitive information is protected! Only skills and experience are sent to AI.
+                                </div>
+                            </div>
+                            """, unsafe_allow_html=True)
+                        
+                        st.markdown("### ✅ Generated Interview Q&A")
+                        qa_items = result.get("qa_items", [])
+                        
+                        if qa_items:
+                            display_qa_results(qa_items)
+                            
+                            # Summary
+                            col_info1, col_info2, col_info3 = st.columns(3)
+                            with col_info1:
+                                st.metric("Questions Generated", len(qa_items))
+                            with col_info2:
+                                st.metric("File Type", result.get("file_type", "").upper())
+                            with col_info3:
+                                st.metric("Text Length", f"{result.get('extracted_text_length', 0)} chars")
+                            
+                            # Download options
+                            col_excel, col_txt = st.columns([1, 1])
+                            
+                            with col_excel:
+                                excel_data, excel_error = download_excel(qa_items, st.session_state.last_candidate_name)
+                                if excel_data:
+                                    st.download_button(
+                                        label="📊 Download as Excel",
+                                        data=excel_data,
+                                        file_name=f"interview_qa_{st.session_state.last_candidate_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                        use_container_width=True
+                                    )
+                            
+                            with col_txt:
+                                # Convert to text format
+                                txt_content = "\n\n".join([
+                                    f"Topic: {qa['Topic']}\n\nQuestion: {qa['Question']}\n\nAnswer: {qa['Answer']}"
+                                    for qa in qa_items
+                                ])
+                                st.download_button(
+                                    label="📄 Download as Text",
+                                    data=txt_content,
+                                    file_name=f"interview_qa_{st.session_state.last_candidate_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
+                                    mime="text/plain",
+                                    use_container_width=True
+                                )
+                        else:
+                            st.warning("No Q&A items generated. Please check your resume content.")
                     else:
                         st.error(f"❌ Error: {error}")
             
             with col2:
-                st.info("💡 **Tip:** Create a .txt file with one skill/tool per line for best results")
+                st.info("💡 **How it works:**\n1. Resume text is extracted\n2. Personal info (names, emails) is removed\n3. Skills are sent to AI for questions\n4. Results are formatted in Excel")
         else:
-            st.info("👆 Upload a text file to get started")
+            st.info("👆 Upload a resume file (PDF or DOCX) to get started")
     
     # Footer
     st.markdown("---")
     st.markdown("""
     <div style='text-align: center; color: #888;'>
-    <small>Powered by Google Gemini 2.5 Flash | Built with Streamlit & FastAPI</small>
+    <small>Powered by Google Gemini 2.5 Flash | Built with Streamlit, FastAPI & Professional Resume Parsing</small>
     </div>
     """, unsafe_allow_html=True)
 
 
 if __name__ == "__main__":
+    # Initialize session state
+    if "last_qa_items" not in st.session_state:
+        st.session_state.last_qa_items = []
+    if "last_candidate_name" not in st.session_state:
+        st.session_state.last_candidate_name = ""
+    
+    from pathlib import Path
     main()

@@ -18,3 +18,11 @@ python-multipart>=0.0.5
 # Streamlit & Frontend
 streamlit>=1.25.0
 requests>=2.30.0
+
+# Resume Parsing & Document Processing
+pdfplumber>=0.10.0
+python-docx>=0.8.11
+openpyxl>=3.1.0
+
+# PII Detection & Redaction
+regex>=2024.0.0

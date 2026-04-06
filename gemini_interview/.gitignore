@@ -30,3 +30,7 @@ secret_api_key.txt
 # Jupyter
 .ipynb_checkpoints/
 *.ipynb
+
+# Application logs (keep folder, ignore log files)
+logs/*.log
+logs/*.log.*

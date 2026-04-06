@@ -1,22 +1,34 @@
 # Gemini Interview Q&A Generator
 
-## Overview
-A full-stack web application that generates comprehensive interview questions and answers using Google's Gemini 2.5 Flash API. Built with **Streamlit** (frontend) and **FastAPI** (backend).
+**Version 2.0** - Professional Resume Processing & Excel Export
 
-## Features
-✨ **Core Features:**
-- Generate customizable interview Q&A pairs
-- Text input or file upload for candidate profiles
-- Includes coding-focused questions relevant to candidate experience
-- Download results as text files
-- Real-time API health monitoring
-- Beautiful, responsive UI
+## Overview
+A full-stack web application that generates comprehensive interview questions and answers using Google's Gemini 2.5 Flash API. **Now with professional resume parsing, PII redaction, and Excel export!**
+
+Built with **Streamlit** (frontend) and **FastAPI** (backend).
+
+## ✨ Features
+
+### Version 2.0 (NEW!)
+- 📄 **Resume Upload** - PDF and Word file support
+- 🔒 **PII Redaction** - Automatic removal of sensitive data before LLM processing
+- 📊 **Excel Export** - Professional formatted spreadsheets with styling
+- 🧠 **No PII Exposure** - Skills extracted locally, only technical content sent to AI
+- 🔍 **Enhanced Parsing** - Improved Q&A extraction and structuring
+
+### Core Features
+- 💡 Generate customizable interview Q&A pairs (5-100 questions)
+- 📝 Text input or file upload for candidate profiles
+- 📥 Upload PDF/DOCX resumes for automatic processing
+- 💾 Download results as Excel (formatted) or Text
+- 🏥 Real-time API health monitoring
+- 🎨 Beautiful, responsive UI with dark mode support
 
 🏗️ **Architecture:**
 - **Frontend:** Streamlit for user-friendly interface
-- **Backend:** FastAPI for robust API endpoints
-- **Service Layer:** Modular Gemini service for API interactions
-- **File Upload:** Support for text files with candidate information
+- **Backend:** FastAPI for robust API endpoints  
+- **Service Layer:** Modular services for resume parsing, PII redaction, Excel export
+- **Security:** No PII sent to LLM - everything extracted locally
 
 ## Prerequisites
 - Python 3.8+
@@ -49,25 +61,55 @@ Create `secret_api_key.txt` in the `gemini_interview/` directory:
 api_key = "YOUR_ACTUAL_GEMINI_API_KEY_HERE"
 ```
 
+Or set environment variable:
+```bash
+set GEMINI_API_KEY=your_api_key_here  # Windows
+export GEMINI_API_KEY=your_api_key_here  # Linux/Mac
+```
+
 ## Project Structure
 ```
 gemini_interview/
 ├── backend/
 │   ├── __init__.py              # Package init
-│   ├── main.py                  # FastAPI application
+│   ├── main.py                  # FastAPI application (v2.0+)
 │   ├── models.py                # Pydantic models
 │   ├── gemini_service.py        # Gemini API service layer
-│   └── requirements.txt          # Backend dependencies
+│   ├── resume_parser.py         # NEW: Resume text extraction
+│   ├── pii_redactor.py          # NEW: PII detection & removal
+│   └── excel_exporter.py        # NEW: Excel file generation
 ├── frontend/
-│   └── streamlit_app.py         # Streamlit UI application
-├── gemini001.py                 # Original script (legacy)
-├── requirements.txt             # All dependencies
+│   └── streamlit_app.py         # Streamlit UI application (v2.0+)
+├── requirements.txt             # All dependencies (updated)
 ├── secret_api_key.txt           # API key (add your key here)
 ├── run.bat                      # Windows startup script
 ├── run.sh                       # Linux/Mac startup script
 ├── README.md                    # This file
+├── UPGRADE_GUIDE.md             # NEW: Detailed v2.0 changes
 └── .gitignore                   # Git ignore rules
 ```
+
+## 🎯 What's New in v2.0?
+
+**See [UPGRADE_GUIDE.md](UPGRADE_GUIDE.md) for comprehensive documentation!**
+
+### New Features:
+- 📄 **Resume Upload** - Support for PDF and DOCX files
+- 🔒 **PII Redaction** - Automatic removal of sensitive data before LLM processing
+- 📊 **Excel Export** - Professional formatted spreadsheets with styling
+- 🏗️ **New Backend Modules**:
+  - `resume_parser.py` - Extract text from PDF/DOCX files
+  - `pii_redactor.py` - Detect and remove PII (emails, phone, URLs, names, companies)
+  - `excel_exporter.py` - Generate beautifully formatted Excel workbooks
+
+### New API Endpoints:
+- `POST /api/process-resume` - Upload resume and generate Q&A with PII redaction
+- `POST /api/download-excel` - Convert Q&A to formatted Excel file
+
+### Security:
+- **NO PII sent to LLM** - Skills and experience extracted locally before AI processing
+- **Automatic Detection** - Emails, phone numbers, URLs, company names automatically detected
+- **Privacy Protected** - Complete PII removal before Gemini API call
 
 ## Usage
 
@@ -137,35 +179,71 @@ file: <text_file>
 num_questions: 30
 ```
 
+### Process Resume (NEW in v2.0)
+```
+POST /api/process-resume
+Content-Type: multipart/form-data
+
+file: <pdf_or_docx_file>
+num_questions: 30
+
+Response:
+{
+  "status": "success",
+  "filename": "resume.pdf",
+  "file_type": "pdf",
+  "extracted_text_length": 5234,
+  "pii_detected": true,
+  "pii_summary": {
+    "emails": [...],
+    "phone_numbers": [...],
+    "urls": [...]
+  },
+  "qa_items": [
+    {
+      "Topic": "Python",
+      "Question": "What is a decorator?",
+      "Answer": "..."
+    }
+  ],
+  "total_questions": 30
+}
+```
+
+### Download Excel (NEW in v2.0)
+```
+POST /api/download-excel
+Content-Type: application/x-www-form-urlencoded
+
+qa_items_json: [{"Topic": "...", "Question": "...", "Answer": "..."}]
+candidate_name: John Doe
+
+Response: Excel file (XLSX) attachment
+```
+
 ## Usage Examples
 
 ### Example 1: Text Input
-1. Open Streamlit UI
+1. Open Streamlit UI (http://localhost:8501)
 2. Go to "📝 Text Input" tab
 3. Enter candidate experience: `Python, Pandas, NumPy, SQL, Statistics, Machine Learning`
 4. Set number of questions: 30
 5. Click "🚀 Generate Q&A"
-6. Download results
+6. Download as Excel or Text
 
-### Example 2: File Upload
-1. Create a file `candidate_profile.txt`:
-```
-Python
-PySpark
-Pandas
-NumPy
-Data Analysis
-MySQL
-SQL
-Matplotlib
-Data Profiling
-ETL
-Apache Spark
-Statistics
-Machine Learning
-```
-2. Go to "📄 File Upload" tab
-3. Upload the file
+### Example 2: Resume Upload (NEW in v2.0)
+1. Open Streamlit UI (http://localhost:8501)
+2. Go to "📄 Resume Upload" tab
+3. Upload your resume in PDF or DOCX format
+4. Set number of questions: 30
+5. Click "🚀 Process & Generate Q&A"
+6. Review PII Detection Report
+7. Download results as Excel (formatted) or Text
+
+### Example 3: File Upload (Legacy)
+1. Create a file `candidate_profile.txt` with skills listed
+2. Go to Streamlit UI
+3. Upload the text file
 4. Click "🚀 Generate Q&A"
 5. Download results
 
