@@ -17,6 +17,13 @@ _app_log = get_app_logger()
 class GeminiService:
     """Service class to handle Gemini API interactions"""
     
+    # Supported programming languages for code examples
+    SUPPORTED_LANGUAGES = [
+        'python', 'javascript', 'typescript', 'java', 'c#', 'csharp',
+        'go', 'rust', 'php', 'ruby', 'swift', 'kotlin',
+        'c++', 'cpp', 'sql', 'r', 'scala'
+    ]
+    
     def __init__(self, api_key: str = None):
         """Initialize Gemini service with API key"""
         # Use provided key, fall back to config
@@ -28,9 +35,52 @@ class GeminiService:
         # Use model name from centralized config
         self.model_name = GEMINI_MODEL_NAME
     
+    @staticmethod
+    def extract_programming_languages(experience_text: str) -> str:
+        """
+        Extract programming languages from candidate's experience text.
+        
+        Args:
+            experience_text: Candidate's experience/skills text
+            
+        Returns:
+            Comma-separated string of detected languages, or 'Python' as default
+        """
+        if not experience_text:
+            return "Python"
+        
+        experience_lower = experience_text.lower()
+        detected_languages = []
+        
+        language_keywords = {
+            'python': ['python', 'django', 'flask', 'fastapi', 'celery', 'pandas', 'numpy'],
+            'javascript': ['javascript', 'js', 'node.js', 'nodejs', 'express', 'react', 'vue', 'angular', 'webpack'],
+            'typescript': ['typescript', 'ts', 'nestjs', 'angular'],
+            'java': ['java', 'spring', 'spring boot', 'maven', 'gradle', 'junit', 'hibernate'],
+            'c#': ['c#', 'csharp', '.net', 'dotnet', 'asp.net', 'entity framework'],
+            'go': ['golang', 'go', 'gin', 'goroutine'],
+            'rust': ['rust', 'cargo', 'actix'],
+            'php': ['php', 'laravel', 'symfony', 'composer'],
+            'sql': ['sql', 'postgresql', 'postgres', 'mysql', 'oracle', 'tsql', 't-sql', 'sqlite', 'mongodb', 'redis'],
+            'swift': ['swift', 'ios', 'xcode'],
+            'kotlin': ['kotlin', 'android'],
+            'ruby': ['ruby', 'rails', 'sinatra'],
+        }
+        
+        for language, keywords in language_keywords.items():
+            for keyword in keywords:
+                if keyword in experience_lower:
+                    if language not in detected_languages:
+                        detected_languages.append(language)
+                    break
+        
+        if detected_languages:
+            return ', '.join(detected_languages)
+        return "Python"
+    
     def generate_interview_qa(self, experience_tools: str, num_questions: int) -> str:
         """
-        Generate interview Q&A based on experience.
+        Generate interview Q&A based on experience with diverse question types.
         
         Args:
             experience_tools: Candidate's skills, tools, and experience
@@ -39,28 +89,78 @@ class GeminiService:
         Returns:
             Raw response text from Gemini containing Q&A pairs
         """
+        # Extract programming languages from candidate profile
+        detected_languages = self.extract_programming_languages(experience_tools)
+        
+        # Calculate question distribution
+        technical_count = int(num_questions * 0.40)
+        project_count = int(num_questions * 0.40)
+        coding_count = num_questions - technical_count - project_count
+        
         prompt = f"""
-Role: Expert Technical Interviewer
+You are an expert technical interviewer creating interview questions for a software engineer.
 
-Candidate Profile: {experience_tools}
+CANDIDATE PROFILE:
+{experience_tools}
 
-Task: Create {num_questions} interview questions with answers based on this experience.
+TASK: Generate exactly {num_questions} interview questions with comprehensive answers following this distribution:
+- {technical_count} TECHNICAL questions (~40%)
+- {project_count} PROJECT/EXPERIENCE & TOOLS questions (~40%)
+- {coding_count} CODING/PRACTICAL questions (~20%)
 
-Format each Q&A as JSON without markdown:
-{{
-"Topic": "Subject",
-"Question": "Question text",
-"Answer": "Answer text"
-}}
+QUESTION TYPE GUIDELINES:
 
-Separate questions with blank lines.
+1. TECHNICAL QUESTIONS (Core Concepts & Architecture):
+   - Deep dive into design patterns, architecture principles, scalability
+   - System design, performance optimization, security best practices
+   - Technologies, frameworks, libraries in their experience
+   - Focus on "why" and "how" over surface-level knowledge
+   - Ask about trade-offs and decision-making
+
+2. PROJECT/EXPERIENCE & TOOLS QUESTIONS (Real-World Application):
+   - Behavioral questions about actual projects and experiences
+   - How they used specific tools, frameworks, or technologies
+   - Problem-solving approaches and challenges overcome
+   - Team collaboration and technical leadership
+   - Decision-making in real scenarios
+
+3. CODING/PRACTICAL QUESTIONS (Web Development Focused):
+   - Practical web application scenarios (API design, validation, async handling)
+   - Database query optimization, backend logic
+   - Bug fixing or code improvement challenges
+   - Technology to use: {detected_languages}
+   - IMPORTANT: Provide runnable code examples in answers with:
+     * Correct implementation
+     * Edge cases and error handling
+     * Performance considerations
+     * Best practices and comments
+
+ANSWER REQUIREMENTS:
+- Each answer MUST be comprehensive (150-300 words for technical/project, 200-400 words for coding)
+- Include code examples for coding questions with proper syntax highlighting
+- Explain concepts clearly with real-world examples
+- For coding questions: include the complete function/class implementation
+- Mention edge cases, performance considerations, and best practices
+- Be specific - avoid generic answers
+
+FORMAT REQUIREMENT:
+Return each Q&A as valid JSON on separate lines (no markdown, no triple backticks):
+{{"Topic": "Subject", "Question": "Question text", "Answer": "Answer text with code examples if needed"}}
+
+IMPORTANT: Separate each JSON object with a blank line. Ensure each JSON is valid and properly escaped.
 """
+        
         _app_log.info(
             "[LLM] Sending request to Gemini | model=%s | "
-            "prompt_length=%d chars | num_questions=%d",
+            "prompt_length=%d chars | num_questions=%d | "
+            "distribution=tech:%d project:%d coding:%d | detected_languages=%s",
             self.model_name,
             len(prompt),
             num_questions,
+            technical_count,
+            project_count,
+            coding_count,
+            detected_languages,
         )
         try:
             response = self.client.models.generate_content(
@@ -84,6 +184,7 @@ Separate questions with blank lines.
     def parse_qa_response(response_text: str) -> List[Dict[str, str]]:
         """
         Parse Q&A response from Gemini into structured JSON objects.
+        Improved to handle comprehensive answers with code examples.
         
         Args:
             response_text: Raw response text from Gemini
@@ -96,17 +197,19 @@ Separate questions with blank lines.
         if not response_text:
             return qa_items
         
-        # Try to parse JSON objects
-        # Look for JSON patterns: {...} on individual lines
-        json_pattern = r'\{[^{}]*"Topic"[^{}]*"Question"[^{}]*"Answer"[^{}]*\}'
-        matches = re.finditer(json_pattern, response_text, re.DOTALL)
+        # Split by blank lines to separate JSON objects
+        # Each JSON object should be on its own block
+        blocks = re.split(r'\n\s*\n', response_text)
         
-        for match in matches:
+        for block in blocks:
+            block = block.strip()
+            if not block or not block.startswith('{'):
+                continue
+            
             try:
-                json_str = match.group(0)
-                # Clean up the JSON
-                json_str = json_str.replace('\n', ' ')
-                qa_data = json.loads(json_str)
+                # Try to parse JSON directly
+                # Handle cases where the JSON might span multiple lines
+                qa_data = json.loads(block)
                 
                 # Validate required fields
                 if all(key in qa_data for key in ['Topic', 'Question', 'Answer']):
@@ -116,7 +219,21 @@ Separate questions with blank lines.
                         'Answer': str(qa_data['Answer']).strip()
                     })
             except json.JSONDecodeError:
-                continue
+                # Try regex pattern matching as fallback for inline JSON
+                json_pattern = r'\{[^{}]*"Topic"[^{}]*"Question"[^{}]*"Answer"[^{}]*\}'
+                match = re.search(json_pattern, block, re.DOTALL)
+                if match:
+                    try:
+                        json_str = match.group(0)
+                        qa_data = json.loads(json_str)
+                        if all(key in qa_data for key in ['Topic', 'Question', 'Answer']):
+                            qa_items.append({
+                                'Topic': str(qa_data['Topic']).strip(),
+                                'Question': str(qa_data['Question']).strip(),
+                                'Answer': str(qa_data['Answer']).strip()
+                            })
+                    except json.JSONDecodeError:
+                        continue
         
         # Fallback: If no JSON objects found, try line-by-line parsing
         if not qa_items:
